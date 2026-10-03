@@ -53,15 +53,16 @@ jobs:
           CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
           TURSO_TOKEN: ${{ secrets.TURSO_TOKEN }}
         run: python pipeline/ops.py
-      # The check itself could not run (checkout/install failed: usually SOURCE_TOKEN
-      # expired or revoked). ops.py never started, so it can't raise its own alarm.
-      # A failed Health check (= problems found) is ops.py's job, not this step's.
+      # The check never finished (checkout/install failed — usually SOURCE_TOKEN
+      # expired or revoked — or ops.py crashed or timed out): ops.py writes done=1
+      # as its very last act, so its absence means it could not raise its own alarm.
+      # A Health check that FINISHED with problems is ops.py's job, not this step's.
       - name: Alarm when the watchdog could not run
-        if: failure() && steps.health.outcome != 'failure'
+        if: always() && steps.health.outputs.done != '1'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           open=$(gh issue list -R "$GITHUB_REPOSITORY" -l watchdog --state open --json number -q 'length')
           if [ "$open" = "0" ]; then
-            gh issue create -R "$GITHUB_REPOSITORY" -l watchdog -a "$GITHUB_REPOSITORY_OWNER"               -t "Watchdog could not run"               -b "The hourly check failed before it could look at anything (checkout or install). Most likely SOURCE_TOKEN expired or was revoked: runner repo > Settings > Secrets > Actions. Log: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            gh issue create -R "$GITHUB_REPOSITORY" -l watchdog -a "$GITHUB_REPOSITORY_OWNER"               -t "Watchdog could not run"               -b "The hourly check did not finish (checkout, install or a crash). If checkout failed, most likely SOURCE_TOKEN expired or was revoked: runner repo > Settings > Secrets > Actions. Log: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           fi
