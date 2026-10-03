@@ -1,0 +1,117 @@
+name: pipeline
+on:
+  schedule:
+    # MEASURED 2026-08-08: GitHub honoured this */5 cron every 50-180 min, not
+    # every 5 — scheduled workflows are heavily deprioritised and no cron value
+    # fixes that. So the cron is only a re-starter: each run stays resident for
+    # ~5.5h polling every 45s (see LOOP_* below), which is what actually
+    # delivers the freshness. Public repo => unlimited minutes, so this is free.
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+# least privilege: the job only reads the repo; secrets are injected explicitly
+permissions:
+  contents: read
+
+# A late run must never pile up behind a slow one.
+concurrency:
+  group: pipeline
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    # A resident poller, not a one-shot job: 5h50m < GitHub's 6h ceiling.
+    timeout-minutes: 350
+    steps:
+      - id: src
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          repository: tanishkbisht584-ux/finhub  # the code is private; this repo only runs it
+          token: ${{ secrets.SOURCE_TOKEN }}       # fine-grained, Contents read-only on finhub only
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r pipeline/requirements.txt
+      - run: python pipeline/run.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          # stores.py (29 Sep): the second project = mutual hot standby. Unset =
+          # one project, the old behaviour. Anon keys = the app's publishable
+          # keys, published in config.json so phones can fail over too.
+          SUPABASE_URL_2: ${{ secrets.SUPABASE_URL_2 }}
+          SUPABASE_SERVICE_KEY_2: ${{ secrets.SUPABASE_SERVICE_KEY_2 }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_ANON_KEY_2: ${{ secrets.SUPABASE_ANON_KEY_2 }}
+          # migrate_project.sync (user + auth copy every 10 min) needs SQL access
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_ACCESS_TOKEN_2: ${{ secrets.SUPABASE_ACCESS_TOKEN_2 }}  # project 2 is in another account
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          # optional: set this secret to enable the OpenRouter failover
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          # turns send_fcm from a printed no-op into real pushes (M7)
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          # optional, markets upgrade (2026-08-22): keyed news APIs + FRED macro.
+          # Unset = those sources log FEED FAIL / macro skips; nothing else changes.
+          GNEWS_API_KEY: ${{ secrets.GNEWS_API_KEY }}
+          NEWSDATA_API_KEY: ${{ secrets.NEWSDATA_API_KEY }}
+          MARKETAUX_API_KEY: ${{ secrets.MARKETAUX_API_KEY }}
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+          # static data plane (publish.py): fine-grained PAT, Contents read/write
+          # on finflick-data only. Unset = publishing is a no-op.
+          DATA_REPO_TOKEN: ${{ secrets.DATA_REPO_TOKEN }}
+          # 29 Sep: cold copies outside Supabase (backup.py) and the D1 file
+          # mirror (publish.py). Each is inert while its secrets are unset.
+          NEON_URLS: ${{ secrets.NEON_URLS }}
+          TURSO_URL: ${{ secrets.TURSO_URL }}
+          TURSO_TOKEN: ${{ secrets.TURSO_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          CF_D1_DATABASE_ID: ${{ secrets.CF_D1_DATABASE_ID }}
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          # Stay resident ~5.5h polling every 45s, then exit; the queued run
+          # (concurrency group, cancel-in-progress: false) takes over, so
+          # coverage is continuous regardless of when the cron is honoured.
+          # deploy drift: stamp the code repo's commit, not this runner repo's
+          SOURCE_SHA: ${{ steps.src.outputs.commit }}
+          LOOP_SECONDS: '45'
+          LOOP_MAX_SECONDS: '19800'
+
+  # 30 Sep: the pipeline restarts itself. Cron fired 4-8 h late (measured), and a
+  # run that ended with nothing queued left news dead until cron woke up. This
+  # job dispatches the next run the moment `run` ends — normally or by crash, not
+  # when cancelled by hand — and each handoff picks up the newest commit. It is
+  # the only job that may start runs: no checkout, no secrets. Stop the chain
+  # without a commit: repo Settings › Variables › Actions › CHAIN = off.
+  # A run that FAILS inside 15 min is a broken commit/secret, not a lost runner:
+  # re-dispatching it would crash-loop every minute, so the chain stops there and
+  # the hourly watchdog + cron take over (audit A5, 30 Sep).
+  chain:
+    needs: run
+    if: ${{ !cancelled() && vars.CHAIN != 'off' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - run: |
+          if [ "$RESULT" != "success" ]; then
+            started=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .run_started_at)
+            age=$(( $(date +%s) - $(date -d "$started" +%s) ))
+            if [ "$age" -lt 900 ]; then
+              echo "::error::run failed after ${age}s - not re-dispatching (crash loop guard)"
+              exit 0
+            fi
+          fi
+          # GitHub disables scheduled workflows in a public repo after 60 days
+          # without commits, and this repo rarely gets any: re-enable first
+          # (a no-op when already enabled).
+          gh workflow enable pipeline.yml -R "$GITHUB_REPOSITORY"
+          gh workflow enable watchdog.yml -R "$GITHUB_REPOSITORY"
+          gh workflow run pipeline.yml --ref main -R "$GITHUB_REPOSITORY"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ needs.run.result }}

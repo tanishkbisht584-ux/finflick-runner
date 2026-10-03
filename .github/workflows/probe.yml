@@ -1,0 +1,34 @@
+name: probe
+# Shape probe (manual only): prints the response shapes of the URLs you paste
+# — the answers that can't be fetched from the dev machine (NSE Akamai-blocks
+# it). No secrets, no writes — read pipeline/probe.py.
+on:
+  workflow_dispatch:
+    inputs:
+      urls:
+        description: URLs to probe, space-separated
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - id: src
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          repository: tanishkbisht584-ux/finhub  # the code is private; this repo only runs it
+          token: ${{ secrets.SOURCE_TOKEN }}       # fine-grained, Contents read-only on finhub only
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+        working-directory: pipeline
+      - run: python probe.py
+        working-directory: pipeline
+        env:
+          PROBE_URLS: ${{ inputs.urls }}
