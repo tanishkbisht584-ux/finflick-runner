@@ -1,0 +1,7 @@
+# Bumps the pinned action SHAs. Merging its PRs is also the commit activity
+# that keeps GitHub from pausing this repo's schedules after 60 quiet days.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }

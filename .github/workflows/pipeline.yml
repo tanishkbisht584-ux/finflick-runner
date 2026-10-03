@@ -109,8 +109,9 @@ jobs:
           # GitHub disables scheduled workflows in a public repo after 60 days
           # without commits, and this repo rarely gets any: re-enable first
           # (a no-op when already enabled).
-          gh workflow enable pipeline.yml -R "$GITHUB_REPOSITORY"
-          gh workflow enable watchdog.yml -R "$GITHUB_REPOSITORY"
+          # Never fatal: a failed enable must not block the dispatch below.
+          gh workflow enable pipeline.yml -R "$GITHUB_REPOSITORY" || echo "::warning::enable pipeline.yml failed"
+          gh workflow enable watchdog.yml -R "$GITHUB_REPOSITORY" || echo "::warning::enable watchdog.yml failed"
           gh workflow run pipeline.yml --ref main -R "$GITHUB_REPOSITORY"
         env:
           GH_TOKEN: ${{ github.token }}
