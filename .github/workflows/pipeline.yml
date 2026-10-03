@@ -113,6 +113,9 @@ jobs:
           gh workflow enable pipeline.yml -R "$GITHUB_REPOSITORY" || echo "::warning::enable pipeline.yml failed"
           gh workflow enable watchdog.yml -R "$GITHUB_REPOSITORY" || echo "::warning::enable watchdog.yml failed"
           gh workflow run pipeline.yml --ref main -R "$GITHUB_REPOSITORY"
+          # GitHub fires schedules hours late (or not at all on a fresh repo): every
+          # handoff also starts a health check, so it never goes ~6 h without one.
+          gh workflow run watchdog.yml --ref main -R "$GITHUB_REPOSITORY" || echo "::warning::watchdog dispatch failed"
         env:
           GH_TOKEN: ${{ github.token }}
           RESULT: ${{ needs.run.result }}
