@@ -21,6 +21,9 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write   # run.kick_watchdog: start the watchdog hourly (cron fires ~1 in 3)
     # A resident poller, not a one-shot job: 5h50m < GitHub's 6h ceiling.
     timeout-minutes: 350
     steps:
@@ -77,6 +80,7 @@ jobs:
           # coverage is continuous regardless of when the cron is honoured.
           # deploy drift: stamp the code repo's commit, not this runner repo's
           SOURCE_SHA: ${{ steps.src.outputs.commit }}
+          GH_TOKEN: ${{ github.token }}  # kick_watchdog only; GITHUB_REPOSITORY is set by Actions
           LOOP_SECONDS: '45'
           LOOP_MAX_SECONDS: '19800'
 
