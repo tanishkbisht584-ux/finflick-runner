@@ -38,6 +38,14 @@ jobs:
           python-version: '3.12'
           cache: pip
       - run: pip install -r pipeline/requirements.txt
+      # 13 Oct 2026: the story windows the last job left (run.save_warm), so this
+      # job's first lap reads only what changed: every job used to re-read ~10 MB
+      # cold (5 jobs/day = ~40 MB/day of Supabase egress). No cache = cold start.
+      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: pipeline/.warm.json
+          key: warm-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: warm-
       - run: python pipeline/run.py
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -83,6 +91,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}  # kick_watchdog only; GITHUB_REPOSITORY is set by Actions
           LOOP_SECONDS: '45'
           LOOP_MAX_SECONDS: '19800'
+      # also after a crash: the file is the last 30-min copy
+      - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        if: always()
+        with:
+          path: pipeline/.warm.json
+          key: warm-${{ github.run_id }}-${{ github.run_attempt }}
 
   # 30 Sep: the pipeline restarts itself. Cron fired 4-8 h late (measured), and a
   # run that ended with nothing queued left news dead until cron woke up. This
